@@ -1,0 +1,8 @@
+{
+  "name": "Remix Sabores \u0026 Nações - POS \u0026 Gestão de Restaurante",
+  "description": "Sistema integrado de ponto de venda, comanda digital de mesa, gestão de salas, cozinha, caixa e faturação certificada para a Sabores \u0026 Nações em Portugal.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
