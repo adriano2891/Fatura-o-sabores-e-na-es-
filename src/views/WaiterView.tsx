@@ -24,6 +24,16 @@ import {
   Bell,
   Layers,
   Award,
+  Receipt,
+  Printer,
+  Share2,
+  Mail,
+  MessageCircle,
+  Split,
+  CreditCard,
+  Banknote,
+  Smartphone,
+  RefreshCw,
 } from 'lucide-react';
 import { AppState, store } from '../services/storage';
 import {
@@ -36,11 +46,14 @@ import {
   AllergyRestriction,
   RestrictionType,
   PaymentMethod,
+  FiscalDocument,
+  FiscalDocumentType,
 } from '../types';
 import { formatCurrency, formatTime, getElapsedMinutes, formatElapsed, validatePortugueseNIF } from '../utils/formatters';
 import { RepeatItemsModal } from '../components/RepeatItemsModal';
 import { TableQRModal } from '../components/TableQRModal';
 import { ShiftHandoverModal } from '../components/ShiftHandoverModal';
+import { sendInvoiceEmail, sendInvoiceWhatsApp } from '../services/invoiceDispatch';
 
 interface WaiterViewProps {
   state: AppState;
@@ -103,14 +116,31 @@ export const WaiterView: React.FC<WaiterViewProps> = ({ state, onSelectTab }) =>
   // Modais de Apoio
   const [repeatModalOpen, setRepeatModalOpen] = useState(false);
   const [qrModalTable, setQrModalTable] = useState<Table | null>(null);
+  // Modal de Conta, Divisão & Faturação Certificada do Atendimento
   const [billModalOpen, setBillModalOpen] = useState(false);
+  const [billModalTab, setBillModalTab] = useState<'resumo' | 'divisao' | 'fatura' | 'caixa'>('resumo');
+  const [splitMode, setSplitMode] = useState<'igual' | 'lugar' | 'parcial'>('igual');
+  const [splitPaxCount, setSplitPaxCount] = useState<number>(2);
+  const [selectedSeatForSplit, setSelectedSeatForSplit] = useState<number | undefined>(undefined);
+  const [partialPaymentAmount, setPartialPaymentAmount] = useState<number>(0);
+  const [cashReceivedInput, setCashReceivedInput] = useState<string>('');
+  const [directPaymentMethod, setDirectPaymentMethod] = useState<PaymentMethod>('cartao');
+
+  // Faturação Certificada
+  const [invoiceDocType, setInvoiceDocType] = useState<FiscalDocumentType>('FS');
+  const [customerNifInput, setCustomerNifInput] = useState('999999990');
+  const [customerNameInput, setCustomerNameInput] = useState('Consumidor Final');
+  const [customerAddressInput, setCustomerAddressInput] = useState('');
+  const [recipientEmailInput, setRecipientEmailInput] = useState('');
+  const [recipientPhoneInput, setRecipientPhoneInput] = useState('');
+  const [nifError, setNifError] = useState('');
+  const [isIssuingInvoice, setIsIssuingInvoice] = useState(false);
+  const [issuedInvoiceDoc, setIssuedInvoiceDoc] = useState<FiscalDocument | null>(null);
+  const [invoiceDispatchSuccess, setInvoiceDispatchSuccess] = useState<string | null>(null);
+
   const [shiftModalOpen, setShiftModalOpen] = useState(false);
   const [transferTableModalOpen, setTransferTableModalOpen] = useState(false);
   const [targetTransferTableId, setTargetTransferTableId] = useState('');
-  const [customerNifInput, setCustomerNifInput] = useState('999999990');
-  const [customerNameInput, setCustomerNameInput] = useState('Consumidor Final');
-  const [nifError, setNifError] = useState('');
-  const [directPaymentMethod, setDirectPaymentMethod] = useState<PaymentMethod>('cartao');
 
   // Modal Plano de Marmitas
   const [mealPlanModalOpen, setMealPlanModalOpen] = useState(false);
@@ -339,19 +369,180 @@ export const WaiterView: React.FC<WaiterViewProps> = ({ state, onSelectTab }) =>
     setNifError('');
   };
 
-  // Liquidação direta de pagamento no Atendimento (quando ativado expressamente pelo Administrador)
-  const handleDirectPayment = () => {
+  // Liquidação de pagamento no Atendimento com suporte a divisão (por lugar, igualitária, parcial)
+  const handleProcessPayment = () => {
     if (!activeComanda) return;
     try {
+      let amountToPay = activeComanda.balanceDue;
+      let targetItemIds: string[] | undefined = undefined;
+      let targetSeatNumber: number | undefined = undefined;
+
+      if (splitMode === 'igual') {
+        const pax = Math.max(1, splitPaxCount);
+        amountToPay = Math.round((activeComanda.total / pax) * 100) / 100;
+        amountToPay = Math.min(amountToPay, activeComanda.balanceDue);
+      } else if (splitMode === 'lugar' && selectedSeatForSplit !== undefined) {
+        // Encontra todos os itens desse lugar não cancelados e não pagos
+        const seatItems = activeComanda.rounds
+          .flatMap((r) => r.items)
+          .filter((i) => i.status !== 'cancelado' && i.seatNumber === selectedSeatForSplit && !i.isPaid);
+        if (seatItems.length === 0) {
+          alert('Não há itens pendentes de liquidação para este lugar!');
+          return;
+        }
+        amountToPay = seatItems.reduce((acc, it) => acc + it.totalItemPrice, 0);
+        targetItemIds = seatItems.map((it) => it.id);
+        targetSeatNumber = selectedSeatForSplit;
+      } else if (splitMode === 'parcial') {
+        if (partialPaymentAmount <= 0) {
+          alert('Introduza um montante válido a pagar');
+          return;
+        }
+        amountToPay = Math.min(partialPaymentAmount, activeComanda.balanceDue);
+      }
+
+      const receivedAmt =
+        directPaymentMethod === 'dinheiro' && cashReceivedInput
+          ? parseFloat(cashReceivedInput) || amountToPay
+          : amountToPay;
+
+      if (directPaymentMethod === 'dinheiro' && receivedAmt < amountToPay) {
+        alert('O valor entregue em numerário é inferior ao montante a pagar!');
+        return;
+      }
+
       store.registerPayment({
         comandaId: activeComanda.id,
-        payments: [{ method: directPaymentMethod, amount: activeComanda.balanceDue }],
+        payments: [
+          {
+            method: directPaymentMethod,
+            amount: amountToPay,
+            receivedAmount: receivedAmt,
+            seatNumber: targetSeatNumber,
+          },
+        ],
         user: currentUser,
+        itemIds: targetItemIds,
+        seatNumber: targetSeatNumber,
       });
-      setBillModalOpen(false);
-      alert(`Pagamento registado com sucesso via ${directPaymentMethod === 'cartao' ? 'Multibanco' : directPaymentMethod === 'mbway' ? 'MB WAY' : 'Numerário'}!`);
+
+      alert(`Pagamento de ${formatCurrency(amountToPay)} registado com sucesso via ${
+        directPaymentMethod === 'cartao' ? 'Multibanco' : directPaymentMethod === 'mbway' ? 'MB WAY' : 'Numerário'
+      }!`);
+      setCashReceivedInput('');
+      setPartialPaymentAmount(0);
+
+      // Se foi liquidada na totalidade, pode fechar o modal
+      if (activeComanda.balanceDue - amountToPay <= 0.01) {
+        setBillModalOpen(false);
+      }
     } catch (err: any) {
       alert(err.message || 'Erro ao processar pagamento');
+    }
+  };
+
+  // Emissão de Fatura Certificada pelo Atendimento (conforme permissões)
+  const handleIssueInvoiceInAtendimento = async () => {
+    if (!activeComanda) return;
+    if (customerNifInput && customerNifInput !== '999999990') {
+      const nifCheck = validatePortugueseNIF(customerNifInput);
+      if (!nifCheck.valid) {
+        setNifError(nifCheck.message || 'NIF inválido para Portugal');
+        return;
+      }
+    }
+
+    setIsIssuingInvoice(true);
+    setNifError('');
+    setInvoiceDispatchSuccess(null);
+    try {
+      const doc = await store.issueFiscalDocForSale({
+        saleId: activeComanda.saleId,
+        docType: invoiceDocType,
+        customerNif: customerNifInput,
+        customerName: customerNameInput,
+        customerAddress: customerAddressInput,
+        user: currentUser,
+      });
+      setIssuedInvoiceDoc(doc);
+      setInvoiceDispatchSuccess(`Fatura ${doc.series} emitida com sucesso! ATCUD: ${doc.atcud}`);
+    } catch (err: any) {
+      alert(err.message || 'Erro ao emitir fatura');
+    } finally {
+      setIsIssuingInvoice(false);
+    }
+  };
+
+  // Envio de Fatura via WhatsApp
+  const handleSendWhatsAppInvoice = async () => {
+    if (!issuedInvoiceDoc) return;
+    try {
+      const res = await sendInvoiceWhatsApp({
+        document: issuedInvoiceDoc,
+        phone: recipientPhoneInput || '912345678',
+        countryCode: '+351',
+        recipientName: customerNameInput,
+        mode: 'manual',
+        user: currentUser,
+        settings,
+      });
+      if (res.whatsappUrl) {
+        window.open(res.whatsappUrl, '_blank');
+      }
+      setInvoiceDispatchSuccess('Link da fatura certificado pronto e aberto no WhatsApp!');
+    } catch (err: any) {
+      alert(err.message || 'Erro ao gerar WhatsApp');
+    }
+  };
+
+  // Envio de Fatura por E-mail
+  const handleSendEmailInvoice = async () => {
+    if (!issuedInvoiceDoc) return;
+    if (!recipientEmailInput.trim()) {
+      alert('Por favor introduza o endereço de e-mail do cliente.');
+      return;
+    }
+    try {
+      await sendInvoiceEmail({
+        document: issuedInvoiceDoc,
+        recipientEmail: recipientEmailInput.trim(),
+        recipientName: customerNameInput,
+        user: currentUser,
+        settings,
+      });
+      setInvoiceDispatchSuccess(`Fatura enviada com sucesso para ${recipientEmailInput}!`);
+    } catch (err: any) {
+      alert(err.message || 'Erro ao enviar e-mail');
+    }
+  };
+
+  // Assumir Mesa para o garçom atual
+  const handleClaimTable = (tableId: string) => {
+    const table = tables.find((t) => t.id === tableId);
+    if (!table || !table.activeComandaId) return;
+    try {
+      const updatedTables = tables.map((t) =>
+        t.id === tableId ? { ...t, waiterId: currentUser.id, waiterName: currentUser.name } : t
+      );
+      const updatedComandas = comandas.map((c) =>
+        c.id === table.activeComandaId
+          ? { ...c, waiterId: currentUser.id, waiterName: currentUser.name, updatedAt: new Date().toISOString() }
+          : c
+      );
+      store.loadRemoteState({ tables: updatedTables, comandas: updatedComandas });
+      alert(`Mesa ${table.number} atribuída com sucesso ao seu utilizador (${currentUser.name})!`);
+    } catch (err: any) {
+      alert(err.message || 'Erro ao atribuir mesa');
+    }
+  };
+
+  // Libertar mesa limpa
+  const handleReleaseCleanedTable = (tableId: string) => {
+    try {
+      store.releaseTable(tableId);
+      alert('Mesa limpa e libertada com sucesso para o próximo serviço!');
+    } catch (err: any) {
+      alert(err.message || 'Erro ao libertar mesa');
     }
   };
 
@@ -396,9 +587,18 @@ export const WaiterView: React.FC<WaiterViewProps> = ({ state, onSelectTab }) =>
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-2">
             <UtensilsCrossed className="w-5 h-5 text-amber-500" />
-            <h2 className="text-sm md:text-base font-bold text-white">
-              Comanda Digital do Empregado de Mesa
-            </h2>
+            <div>
+              <h2 className="text-sm md:text-base font-bold text-white flex items-center gap-2">
+                <span>Atendimento & Comanda Digital</span>
+                <span className="text-[10px] bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 px-2 py-0.5 rounded-full font-mono flex items-center gap-1.5">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" />
+                  Tempo Real Ativo
+                </span>
+              </h2>
+              <p className="text-[11px] text-stone-400">
+                Operador: <strong className="text-amber-400">{currentUser.name}</strong> • Sincronizado com KDS, BDS e Caixa
+              </p>
+            </div>
           </div>
 
           {/* Filtros de Mesas & Pesquisa para Navegação com Uma Mão */}
@@ -505,6 +705,50 @@ export const WaiterView: React.FC<WaiterViewProps> = ({ state, onSelectTab }) =>
           })}
         </div>
       </div>
+
+      {/* Alerta de Chamado do Cliente na Mesa Selecionada */}
+      {selectedTable && selectedTable.activeCall && (
+        <div className="bg-rose-950/80 border border-rose-600 p-3.5 rounded-2xl flex items-center justify-between gap-3 text-xs text-rose-200 shadow-xl animate-pulse">
+          <div className="flex items-center gap-2">
+            <Bell className="w-5 h-5 text-rose-400 shrink-0" />
+            <div>
+              <strong className="text-white text-sm">Chamado de Cliente ({selectedTable.number}):</strong>{' '}
+              {selectedTable.activeCall.type === 'pedir_conta'
+                ? 'Pediu a conta à mesa'
+                : selectedTable.activeCall.type === 'ajuda'
+                ? 'Solicitou assistência do empregado'
+                : 'Chamou o empregado de mesa'}{' '}
+              <span className="text-rose-300 font-mono text-[11px]">• às {formatTime(selectedTable.activeCall.createdAt)}</span>
+            </div>
+          </div>
+          <button
+            onClick={() => store.resolveTableCall(selectedTable.activeCall!.id, currentUser)}
+            className="px-4 py-2 bg-rose-600 hover:bg-rose-500 text-white font-bold text-xs rounded-xl shadow-md shrink-0 flex items-center gap-1.5 transition-all"
+          >
+            <Check className="w-4 h-4" />
+            Atender Chamado
+          </button>
+        </div>
+      )}
+
+      {/* Alerta de Mesa Aguardando Limpeza */}
+      {selectedTable && selectedTable.status === 'a_aguardar_limpeza' && (
+        <div className="bg-amber-950/40 border border-amber-600/50 p-4 rounded-2xl flex items-center justify-between gap-3 text-xs text-amber-200 shadow-lg">
+          <div className="flex items-center gap-2.5">
+            <Sparkles className="w-5 h-5 text-amber-400" />
+            <div>
+              <strong className="text-white text-sm">{selectedTable.number}</strong> foi liquidada e está a aguardar limpeza para o próximo serviço.
+            </div>
+          </div>
+          <button
+            onClick={() => handleReleaseCleanedTable(selectedTable.id)}
+            className="px-4 py-2 bg-amber-600 hover:bg-amber-500 text-white font-bold rounded-xl shadow-md flex items-center gap-1.5 transition-all"
+          >
+            <CheckCircle2 className="w-4 h-4" />
+            Mesa Limpa / Libertar Mesa
+          </button>
+        </div>
+      )}
 
       {/* Conteúdo Principal: Comanda Selecionada */}
       {!selectedTable ? (
@@ -1422,128 +1666,558 @@ export const WaiterView: React.FC<WaiterViewProps> = ({ state, onSelectTab }) =>
         />
       )}
 
-      {/* Modal Solicitar Conta */}
+      {/* Modal Completo de Fecho de Conta, Divisão & Faturação Certificada do Atendimento */}
       {billModalOpen && activeComanda && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm">
-          <div className="bg-stone-900 border border-stone-800 rounded-2xl w-full max-w-md shadow-2xl p-5 space-y-4 text-stone-100">
-            <div className="flex justify-between items-center border-b border-stone-800 pb-3">
-              <h3 className="font-bold text-sm text-white">Solicitar Conta / Fechar Comanda</h3>
-              <button
-                onClick={() => setBillModalOpen(false)}
-                className="p-1 rounded-lg text-stone-400 hover:text-white"
-              >
-                <X className="w-5 h-5" />
-              </button>
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/85 backdrop-blur-md">
+          <div className="bg-stone-900 border border-stone-800 rounded-3xl w-full max-w-2xl shadow-2xl overflow-hidden flex flex-col max-h-[92vh] text-stone-100 animate-in fade-in zoom-in-95 duration-200">
+            {/* Header com Tabs do Modal */}
+            <div className="p-4 sm:p-5 border-b border-stone-800 bg-stone-950/60">
+              <div className="flex items-center justify-between pb-3">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-9 h-9 rounded-xl bg-amber-500/10 text-amber-500 flex items-center justify-center border border-amber-500/20">
+                    <Receipt className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <h3 className="font-bold text-sm sm:text-base text-white flex items-center gap-2">
+                      <span>Conta & Faturação • {selectedTable?.number}</span>
+                      <span className="text-[10px] bg-stone-800 text-amber-400 px-2 py-0.5 rounded-full font-mono">
+                        {activeComanda.numberDisplay}
+                      </span>
+                    </h3>
+                    <p className="text-[11px] text-stone-400">
+                      Total: <strong className="text-amber-400 font-mono">{formatCurrency(activeComanda.total)}</strong> • 
+                      Saldo por pagar: <strong className="text-rose-400 font-mono">{formatCurrency(activeComanda.balanceDue)}</strong>
+                    </p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => {
+                    setBillModalOpen(false);
+                    setIssuedInvoiceDoc(null);
+                    setInvoiceDispatchSuccess(null);
+                  }}
+                  className="p-1.5 rounded-xl bg-stone-800 hover:bg-stone-700 text-stone-400 hover:text-white transition-colors"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              {/* Navegação entre as 4 Abas */}
+              <div className="flex items-center gap-1.5 bg-stone-900 p-1 rounded-xl border border-stone-800 text-xs overflow-x-auto no-scrollbar">
+                <button
+                  onClick={() => setBillModalTab('resumo')}
+                  className={`flex-1 min-w-[110px] py-1.5 px-2.5 rounded-lg font-bold flex items-center justify-center gap-1.5 transition-all ${
+                    billModalTab === 'resumo' ? 'bg-amber-600 text-white shadow' : 'text-stone-400 hover:text-white'
+                  }`}
+                >
+                  <FileText className="w-3.5 h-3.5" />
+                  <span>1. Fita / Resumo</span>
+                </button>
+                <button
+                  onClick={() => setBillModalTab('divisao')}
+                  className={`flex-1 min-w-[110px] py-1.5 px-2.5 rounded-lg font-bold flex items-center justify-center gap-1.5 transition-all ${
+                    billModalTab === 'divisao' ? 'bg-amber-600 text-white shadow' : 'text-stone-400 hover:text-white'
+                  }`}
+                >
+                  <Split className="w-3.5 h-3.5" />
+                  <span>2. Divisão & Pagar</span>
+                </button>
+                <button
+                  onClick={() => setBillModalTab('fatura')}
+                  className={`flex-1 min-w-[110px] py-1.5 px-2.5 rounded-lg font-bold flex items-center justify-center gap-1.5 transition-all ${
+                    billModalTab === 'fatura' ? 'bg-amber-600 text-white shadow' : 'text-stone-400 hover:text-white'
+                  }`}
+                >
+                  <ShieldCheck className="w-3.5 h-3.5" />
+                  <span>3. Fatura AT</span>
+                </button>
+                <button
+                  onClick={() => setBillModalTab('caixa')}
+                  className={`flex-1 min-w-[110px] py-1.5 px-2.5 rounded-lg font-bold flex items-center justify-center gap-1.5 transition-all ${
+                    billModalTab === 'caixa' ? 'bg-purple-600 text-white shadow' : 'text-stone-400 hover:text-white'
+                  }`}
+                >
+                  <Send className="w-3.5 h-3.5" />
+                  <span>4. Chamar Caixa</span>
+                </button>
+              </div>
             </div>
 
-            <div className="space-y-3 text-xs">
-              <div>
-                <label className="text-stone-400">NIF do Cliente para Faturação:</label>
-                <input
-                  type="text"
-                  maxLength={9}
-                  value={customerNifInput}
-                  onChange={(e) => {
-                    setCustomerNifInput(e.target.value);
-                    setNifError('');
-                  }}
-                  className="w-full bg-stone-950 border border-stone-800 rounded-lg px-3 py-2 text-white font-mono mt-1"
-                />
-                {nifError && <p className="text-[10px] text-rose-400 mt-0.5">{nifError}</p>}
-              </div>
+            {/* Conteúdo da Aba Ativa */}
+            <div className="p-4 sm:p-5 overflow-y-auto flex-1 space-y-4 text-xs">
+              {/* ABA 1: FITA / PRÉ-CONTA */}
+              {billModalTab === 'resumo' && (
+                <div className="space-y-4">
+                  <div className="bg-stone-950 p-4 rounded-2xl border border-stone-800 space-y-3 font-mono text-[11px] max-w-md mx-auto shadow-inner">
+                    <div className="text-center pb-2 border-b border-dashed border-stone-800">
+                      <div className="font-bold text-sm text-white font-sans">SABORES & NAÇÕES</div>
+                      <div className="text-stone-400">Restaurante & Sabores do Mundo</div>
+                      <div className="text-[10px] text-stone-500 mt-1">
+                        Mesa: {selectedTable?.number} ({selectedTable?.roomName})
+                      </div>
+                      <div className="text-[10px] text-stone-500">
+                        Data: {new Date().toLocaleDateString('pt-PT')} • {new Date().toLocaleTimeString('pt-PT', { hour: '2-digit', minute: '2-digit' })}
+                      </div>
+                      <div className="text-[10px] text-amber-500 font-bold uppercase mt-1">
+                        *** CONSULTA DE MESA / CONFERÊNCIA ***
+                      </div>
+                    </div>
 
-              <div>
-                <label className="text-stone-400">Nome do Cliente:</label>
-                <input
-                  type="text"
-                  value={customerNameInput}
-                  onChange={(e) => setCustomerNameInput(e.target.value)}
-                  className="w-full bg-stone-950 border border-stone-800 rounded-lg px-3 py-2 text-white mt-1"
-                />
-              </div>
+                    {/* Itens discriminados */}
+                    <div className="space-y-1.5 py-1">
+                      {activeComanda.rounds.flatMap((r) => r.items).filter((i) => i.status !== 'cancelado').map((it, idx) => (
+                        <div key={idx} className="flex justify-between items-start text-stone-300">
+                          <div className="flex-1 pr-2">
+                            <span>{it.quantity}x {it.productName}</span>
+                            <span className="text-[10px] text-stone-500 ml-1">
+                              ({it.seatName || (it.seatNumber ? `L${it.seatNumber}` : 'Partilhar')})
+                            </span>
+                            <span className="text-[9px] text-stone-500 ml-1">[{Math.round(it.vatRate * 100)}%]</span>
+                          </div>
+                          <div className="font-bold text-white shrink-0">
+                            {formatCurrency(it.totalItemPrice)}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
 
-              <div className="bg-stone-950 p-3 rounded-xl border border-stone-800 space-y-1.5">
-                <div className="flex justify-between text-stone-400">
-                  <span>Mesa:</span>
-                  <span className="font-bold text-white">{selectedTable?.number}</span>
-                </div>
-                <div className="flex justify-between text-stone-400">
-                  <span>Total da Conta:</span>
-                  <span className="font-bold text-amber-400 font-mono">
-                    {formatCurrency(activeComanda.total)}
-                  </span>
-                </div>
-                <div className="flex justify-between text-stone-400">
-                  <span>Saldo por Pagar:</span>
-                  <span className="font-bold text-rose-400 font-mono">
-                    {formatCurrency(activeComanda.balanceDue)}
-                  </span>
-                </div>
-              </div>
-
-              {/* Informação / Controlo de Permissões de Pagamento */}
-              {!settings.allowCashierInAtendimento ? (
-                <div className="p-3 bg-stone-950 rounded-xl border border-stone-800 text-[11px] text-stone-400 space-y-1">
-                  <div className="font-bold text-amber-400 flex items-center gap-1.5">
-                    <ShieldCheck className="w-3.5 h-3.5 text-amber-500" />
-                    Pagamentos Centralizados na Caixa
+                    {/* Discriminação de IVA e Totais */}
+                    <div className="pt-2 border-t border-dashed border-stone-800 space-y-1 text-stone-400">
+                      <div className="flex justify-between">
+                        <span>Incidência IVA 13%:</span>
+                        <span>{formatCurrency(activeComanda.subtotal * 0.7)}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span>Incidência IVA 23%:</span>
+                        <span>{formatCurrency(activeComanda.subtotal * 0.3)}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span>Total de IVA:</span>
+                        <span>{formatCurrency(activeComanda.taxTotal)}</span>
+                      </div>
+                      {activeComanda.discountAmount > 0 && (
+                        <div className="flex justify-between text-emerald-400">
+                          <span>Desconto / Cashback:</span>
+                          <span>-{formatCurrency(activeComanda.discountAmount)}</span>
+                        </div>
+                      )}
+                      <div className="flex justify-between text-sm font-bold text-white pt-2 border-t border-stone-700">
+                        <span>TOTAL DA CONTA:</span>
+                        <span className="text-amber-400">{formatCurrency(activeComanda.total)}</span>
+                      </div>
+                      <div className="flex justify-between text-xs font-bold text-rose-400">
+                        <span>SALDO PENDENTE:</span>
+                        <span>{formatCurrency(activeComanda.balanceDue)}</span>
+                      </div>
+                    </div>
                   </div>
-                  <p>
-                    A confirmação direta de pagamento pelo Atendimento está desativada por padrão.
-                    Ao confirmar, a mesa é marcada como "Conta Solicitada" e o pagamento é liquidado pelo operador de caixa/administrador.
-                  </p>
-                </div>
-              ) : (
-                <div className="p-3 bg-purple-950/40 rounded-xl border border-purple-800/60 text-xs space-y-2">
-                  <div className="font-bold text-purple-300 flex items-center gap-1.5">
-                    <ShieldCheck className="w-3.5 h-3.5 text-purple-400" />
-                    Recebimento Autorizado pelo Administrador
+
+                  <div className="flex items-center justify-center gap-3">
+                    <button
+                      onClick={() => window.print()}
+                      className="px-4 py-2 bg-stone-800 hover:bg-stone-700 text-stone-200 font-bold rounded-xl flex items-center gap-2 shadow"
+                    >
+                      <Printer className="w-4 h-4 text-amber-500" />
+                      Imprimir Consulta de Mesa
+                    </button>
+                    <button
+                      onClick={() => setBillModalTab('divisao')}
+                      className="px-4 py-2 bg-amber-600 hover:bg-amber-500 text-white font-bold rounded-xl flex items-center gap-2 shadow-lg"
+                    >
+                      <Split className="w-4 h-4" />
+                      Prosseguir para Pagamento / Divisão
+                    </button>
                   </div>
-                  <label className="text-stone-300 text-[11px]">Método de Pagamento:</label>
-                  <div className="grid grid-cols-3 gap-2">
-                    {(['cartao', 'numerario', 'mbway'] as PaymentMethod[]).map((m) => (
+                </div>
+              )}
+
+              {/* ABA 2: DIVISÃO DE CONTA & PAGAMENTO */}
+              {billModalTab === 'divisao' && (
+                <div className="space-y-4">
+                  {/* Seletor do Modo de Divisão */}
+                  <div className="grid grid-cols-3 gap-2 bg-stone-950 p-1.5 rounded-2xl border border-stone-800">
+                    <button
+                      onClick={() => setSplitMode('igual')}
+                      className={`p-2 rounded-xl font-bold flex flex-col items-center gap-1 transition-all ${
+                        splitMode === 'igual' ? 'bg-amber-600 text-white shadow' : 'text-stone-400 hover:text-white'
+                      }`}
+                    >
+                      <Split className="w-4 h-4" />
+                      <span>Divisão Igualitária</span>
+                    </button>
+                    <button
+                      onClick={() => setSplitMode('lugar')}
+                      className={`p-2 rounded-xl font-bold flex flex-col items-center gap-1 transition-all ${
+                        splitMode === 'lugar' ? 'bg-amber-600 text-white shadow' : 'text-stone-400 hover:text-white'
+                      }`}
+                    >
+                      <Users className="w-4 h-4" />
+                      <span>Por Lugar / Pessoa</span>
+                    </button>
+                    <button
+                      onClick={() => setSplitMode('parcial')}
+                      className={`p-2 rounded-xl font-bold flex flex-col items-center gap-1 transition-all ${
+                        splitMode === 'parcial' ? 'bg-amber-600 text-white shadow' : 'text-stone-400 hover:text-white'
+                      }`}
+                    >
+                      <CreditCard className="w-4 h-4" />
+                      <span>Valor Arbitrário / Misto</span>
+                    </button>
+                  </div>
+
+                  {/* Configuração do Modo Selecionado */}
+                  {splitMode === 'igual' && (
+                    <div className="bg-stone-950 p-4 rounded-2xl border border-stone-800 space-y-3">
+                      <div className="flex items-center justify-between">
+                        <span className="text-stone-300 font-semibold">Dividir a conta igualmente por:</span>
+                        <div className="flex items-center gap-2">
+                          <button
+                            onClick={() => setSplitPaxCount((c) => Math.max(1, c - 1))}
+                            className="w-8 h-8 rounded-lg bg-stone-800 text-white font-bold flex items-center justify-center"
+                          >
+                            -
+                          </button>
+                          <span className="font-mono text-sm font-bold text-white px-2">
+                            {splitPaxCount} pessoas
+                          </span>
+                          <button
+                            onClick={() => setSplitPaxCount((c) => c + 1)}
+                            className="w-8 h-8 rounded-lg bg-stone-800 text-white font-bold flex items-center justify-center"
+                          >
+                            +
+                          </button>
+                        </div>
+                      </div>
+                      <div className="p-3 bg-stone-900 rounded-xl flex items-center justify-between text-sm">
+                        <span className="text-stone-400">Montante por pessoa:</span>
+                        <span className="font-mono font-bold text-amber-400 text-base">
+                          {formatCurrency(Math.round((activeComanda.total / splitPaxCount) * 100) / 100)}
+                        </span>
+                      </div>
+                    </div>
+                  )}
+
+                  {splitMode === 'lugar' && (
+                    <div className="bg-stone-950 p-4 rounded-2xl border border-stone-800 space-y-3">
+                      <div className="text-stone-300 font-semibold">Selecione o Lugar que deseja liquidar:</div>
+                      <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                        {activeComanda.seats.map((seat) => {
+                          const seatItems = activeComanda.rounds
+                            .flatMap((r) => r.items)
+                            .filter((i) => i.status !== 'cancelado' && i.seatNumber === seat.seatNumber);
+                          const seatTotal = seatItems.reduce((acc, it) => acc + it.totalItemPrice, 0);
+                          const seatPaid = seatItems.filter((i) => i.isPaid).reduce((acc, it) => acc + it.totalItemPrice, 0);
+                          const seatBalance = Math.max(0, seatTotal - seatPaid);
+                          const isSelected = selectedSeatForSplit === seat.seatNumber;
+
+                          return (
+                            <button
+                              key={seat.seatNumber}
+                              onClick={() => setSelectedSeatForSplit(seat.seatNumber)}
+                              className={`p-3 rounded-xl border text-left transition-all ${
+                                isSelected
+                                  ? 'border-amber-500 bg-amber-500/20 text-white shadow'
+                                  : seatBalance <= 0.01
+                                  ? 'border-stone-800 bg-stone-900/40 text-stone-500'
+                                  : 'border-stone-800 bg-stone-900 text-stone-300 hover:border-stone-700'
+                              }`}
+                            >
+                              <div className="font-bold flex items-center justify-between">
+                                <span>Lugar {seat.seatNumber}</span>
+                                {seatBalance <= 0.01 && (
+                                  <span className="text-[10px] text-emerald-400 font-bold">Pago</span>
+                                )}
+                              </div>
+                              {seat.name && <div className="text-[10px] text-stone-400">{seat.name}</div>}
+                              <div className="font-mono text-xs font-bold text-amber-400 mt-1">
+                                {formatCurrency(seatBalance)}
+                              </div>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+
+                  {splitMode === 'parcial' && (
+                    <div className="bg-stone-950 p-4 rounded-2xl border border-stone-800 space-y-3">
+                      <label className="text-stone-300 font-semibold">Montante a Liquidar neste pagamento:</label>
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="number"
+                          step="0.01"
+                          placeholder="Ex: 20.00"
+                          value={partialPaymentAmount || ''}
+                          onChange={(e) => setPartialPaymentAmount(parseFloat(e.target.value) || 0)}
+                          className="flex-1 bg-stone-900 border border-stone-800 rounded-xl px-3 py-2 text-white font-mono text-base focus:border-amber-500 focus:outline-none"
+                        />
+                        <button
+                          onClick={() => setPartialPaymentAmount(activeComanda.balanceDue)}
+                          className="px-3 py-2 bg-stone-800 text-stone-300 rounded-xl font-bold text-xs"
+                        >
+                          Total ({formatCurrency(activeComanda.balanceDue)})
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Método de Pagamento */}
+                  <div className="bg-stone-950 p-4 rounded-2xl border border-stone-800 space-y-3">
+                    <label className="text-stone-300 font-semibold">Forma de Pagamento:</label>
+                    <div className="grid grid-cols-3 gap-2">
                       <button
                         type="button"
-                        key={m}
-                        onClick={() => setDirectPaymentMethod(m)}
-                        className={`p-1.5 rounded-lg text-xs font-semibold border capitalize transition-all ${
-                          directPaymentMethod === m
-                            ? 'bg-purple-600 border-purple-500 text-white'
+                        onClick={() => setDirectPaymentMethod('cartao')}
+                        className={`p-2.5 rounded-xl border font-bold flex flex-col items-center gap-1.5 transition-all ${
+                          directPaymentMethod === 'cartao'
+                            ? 'bg-amber-600 border-amber-500 text-white shadow-md'
                             : 'bg-stone-900 border-stone-800 text-stone-400'
                         }`}
                       >
-                        {m === 'cartao' ? 'Multibanco' : m === 'mbway' ? 'MB WAY' : 'Numerário'}
+                        <CreditCard className="w-5 h-5" />
+                        <span>Multibanco</span>
                       </button>
-                    ))}
+                      <button
+                        type="button"
+                        onClick={() => setDirectPaymentMethod('mbway')}
+                        className={`p-2.5 rounded-xl border font-bold flex flex-col items-center gap-1.5 transition-all ${
+                          directPaymentMethod === 'mbway'
+                            ? 'bg-amber-600 border-amber-500 text-white shadow-md'
+                            : 'bg-stone-900 border-stone-800 text-stone-400'
+                        }`}
+                      >
+                        <Smartphone className="w-5 h-5" />
+                        <span>MB WAY</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setDirectPaymentMethod('dinheiro')}
+                        className={`p-2.5 rounded-xl border font-bold flex flex-col items-center gap-1.5 transition-all ${
+                          directPaymentMethod === 'dinheiro'
+                            ? 'bg-amber-600 border-amber-500 text-white shadow-md'
+                            : 'bg-stone-900 border-stone-800 text-stone-400'
+                        }`}
+                      >
+                        <Banknote className="w-5 h-5" />
+                        <span>Numerário</span>
+                      </button>
+                    </div>
+
+                    {/* Campo de Troco para Numerário */}
+                    {directPaymentMethod === 'dinheiro' && (
+                      <div className="p-3 bg-stone-900 rounded-xl border border-stone-800 space-y-2 mt-2">
+                        <label className="text-stone-400 text-[11px]">Valor entregue pelo cliente:</label>
+                        <input
+                          type="number"
+                          step="0.01"
+                          placeholder="Ex: 50.00"
+                          value={cashReceivedInput}
+                          onChange={(e) => setCashReceivedInput(e.target.value)}
+                          className="w-full bg-stone-950 border border-stone-800 rounded-lg px-3 py-1.5 text-white font-mono focus:border-amber-500 focus:outline-none"
+                        />
+                        {cashReceivedInput && parseFloat(cashReceivedInput) > 0 && (
+                          <div className="flex justify-between items-center text-xs font-bold pt-1">
+                            <span className="text-stone-400">Troco a devolver:</span>
+                            <span className="text-emerald-400 font-mono text-sm">
+                              {formatCurrency(Math.max(0, parseFloat(cashReceivedInput) - (
+                                splitMode === 'igual' ? Math.round((activeComanda.total / splitPaxCount) * 100) / 100 :
+                                splitMode === 'parcial' ? partialPaymentAmount :
+                                activeComanda.balanceDue
+                              )))}
+                            </span>
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    <button
+                      onClick={handleProcessPayment}
+                      className="w-full py-3 bg-gradient-to-r from-amber-600 to-emerald-600 hover:from-amber-500 hover:to-emerald-500 text-white font-bold text-sm rounded-xl shadow-lg flex items-center justify-center gap-2 transition-all active:scale-98"
+                    >
+                      <Check className="w-5 h-5" />
+                      Registar Pagamento & Atualizar Caixa
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* ABA 3: FATURAÇÃO CERTIFICADA (VENDUS / AT) */}
+              {billModalTab === 'fatura' && (
+                <div className="space-y-4">
+                  <div className="bg-stone-950 p-4 rounded-2xl border border-stone-800 space-y-3">
+                    <div className="flex items-center justify-between border-b border-stone-800 pb-2">
+                      <span className="font-bold text-white flex items-center gap-1.5">
+                        <ShieldCheck className="w-4 h-4 text-emerald-400" />
+                        Dados Fiscais para Emissão
+                      </span>
+                      <div className="flex items-center gap-1 bg-stone-900 p-0.5 rounded-lg border border-stone-800 text-[10px]">
+                        <button
+                          onClick={() => setInvoiceDocType('FS')}
+                          className={`px-2 py-0.5 rounded font-bold ${
+                            invoiceDocType === 'FS' ? 'bg-amber-600 text-white' : 'text-stone-400'
+                          }`}
+                        >
+                          Fatura Simplificada (FS)
+                        </button>
+                        <button
+                          onClick={() => setInvoiceDocType('FR')}
+                          className={`px-2 py-0.5 rounded font-bold ${
+                            invoiceDocType === 'FR' ? 'bg-amber-600 text-white' : 'text-stone-400'
+                          }`}
+                        >
+                          Fatura-Recibo (FR)
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <div>
+                        <label className="text-stone-400">NIF do Cliente (Portugal):</label>
+                        <input
+                          type="text"
+                          maxLength={9}
+                          value={customerNifInput}
+                          onChange={(e) => {
+                            setCustomerNifInput(e.target.value);
+                            setNifError('');
+                          }}
+                          className="w-full bg-stone-900 border border-stone-800 rounded-xl px-3 py-2 text-white font-mono mt-1 focus:border-amber-500 focus:outline-none"
+                        />
+                        {nifError && <p className="text-[10px] text-rose-400 mt-0.5">{nifError}</p>}
+                      </div>
+
+                      <div>
+                        <label className="text-stone-400">Nome do Cliente / Empresa:</label>
+                        <input
+                          type="text"
+                          value={customerNameInput}
+                          onChange={(e) => setCustomerNameInput(e.target.value)}
+                          className="w-full bg-stone-900 border border-stone-800 rounded-xl px-3 py-2 text-white mt-1 focus:border-amber-500 focus:outline-none"
+                        />
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="text-stone-400">Morada Fiscal (Opcional):</label>
+                      <input
+                        type="text"
+                        placeholder="Ex: Rua Garrett 20, Lisboa"
+                        value={customerAddressInput}
+                        onChange={(e) => setCustomerAddressInput(e.target.value)}
+                        className="w-full bg-stone-900 border border-stone-800 rounded-xl px-3 py-2 text-white mt-1 focus:border-amber-500 focus:outline-none"
+                      />
+                    </div>
+
+                    <div className="p-2.5 bg-amber-500/10 border border-amber-500/20 rounded-xl text-[11px] text-amber-300">
+                      ℹ️ <strong>Nota Legal AT:</strong> A emissão de uma fatura fiscal certificada e a confirmação de recebimento monetário são operações legalmente independentes no sistema.
+                    </div>
+
+                    <button
+                      disabled={isIssuingInvoice}
+                      onClick={handleIssueInvoiceInAtendimento}
+                      className="w-full py-2.5 bg-amber-600 hover:bg-amber-500 text-white font-bold rounded-xl shadow-lg flex items-center justify-center gap-2"
+                    >
+                      <ShieldCheck className="w-4 h-4" />
+                      <span>{isIssuingInvoice ? 'A comunicar com AT/Vendus...' : 'Emitir Fatura Certificada com QR Code AT'}</span>
+                    </button>
+                  </div>
+
+                  {/* Fatura Emitida & Despacho por WhatsApp / Email */}
+                  {(issuedInvoiceDoc || invoiceDispatchSuccess) && (
+                    <div className="bg-emerald-950/30 border border-emerald-800/80 p-4 rounded-2xl space-y-3">
+                      <div className="text-emerald-400 font-bold flex items-center gap-1.5">
+                        <CheckCircle2 className="w-4 h-4" />
+                        {invoiceDispatchSuccess || 'Documento emitido com sucesso!'}
+                      </div>
+
+                      {issuedInvoiceDoc && (
+                        <div className="text-[11px] text-stone-300 space-y-1 font-mono bg-stone-950 p-3 rounded-xl border border-stone-800">
+                          <div>Série / Doc: <strong>{issuedInvoiceDoc.series}</strong></div>
+                          <div>ATCUD: <strong>{issuedInvoiceDoc.atcud}</strong></div>
+                          <div>QR Code AT: <strong className="text-emerald-400">Válido & Assinado</strong></div>
+                        </div>
+                      )}
+
+                      <div className="space-y-2 pt-1">
+                        <div className="text-stone-300 font-semibold">Partilha Segura com o Cliente:</div>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                          <div className="space-y-1">
+                            <input
+                              type="tel"
+                              placeholder="Telemóvel (ex: 912345678)"
+                              value={recipientPhoneInput}
+                              onChange={(e) => setRecipientPhoneInput(e.target.value)}
+                              className="w-full bg-stone-900 border border-stone-800 rounded-lg px-2.5 py-1.5 text-white text-[11px]"
+                            />
+                            <button
+                              onClick={handleSendWhatsAppInvoice}
+                              className="w-full py-1.5 bg-emerald-700 hover:bg-emerald-600 text-white font-bold text-[11px] rounded-lg flex items-center justify-center gap-1.5"
+                            >
+                              <MessageCircle className="w-3.5 h-3.5" />
+                              WhatsApp
+                            </button>
+                          </div>
+
+                          <div className="space-y-1">
+                            <input
+                              type="email"
+                              placeholder="E-mail do cliente"
+                              value={recipientEmailInput}
+                              onChange={(e) => setRecipientEmailInput(e.target.value)}
+                              className="w-full bg-stone-900 border border-stone-800 rounded-lg px-2.5 py-1.5 text-white text-[11px]"
+                            />
+                            <button
+                              onClick={handleSendEmailInvoice}
+                              className="w-full py-1.5 bg-sky-700 hover:bg-sky-600 text-white font-bold text-[11px] rounded-lg flex items-center justify-center gap-1.5"
+                            >
+                              <Mail className="w-3.5 h-3.5" />
+                              E-mail
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* ABA 4: SOLICITAÇÃO CENTRALIZADA À CAIXA */}
+              {billModalTab === 'caixa' && (
+                <div className="space-y-4">
+                  <div className="bg-stone-950 p-5 rounded-2xl border border-stone-800 text-center space-y-3">
+                    <div className="w-12 h-12 rounded-2xl bg-purple-500/10 text-purple-400 flex items-center justify-center mx-auto border border-purple-500/20">
+                      <Send className="w-6 h-6" />
+                    </div>
+                    <h4 className="font-bold text-white text-sm">Transferir Fecho de Conta para a Caixa Central</h4>
+                    <p className="text-stone-400 text-xs max-w-md mx-auto">
+                      Se o cliente for efetuar o pagamento diretamente na recepção/caixa do restaurante, marque a mesa como "Conta Solicitada". O operador do caixa será notificado de imediato em tempo real.
+                    </p>
+                    <button
+                      onClick={handleConfirmRequestBill}
+                      className="px-6 py-2.5 bg-purple-600 hover:bg-purple-500 text-white font-bold rounded-xl shadow-lg flex items-center justify-center gap-2 mx-auto transition-all"
+                    >
+                      <Check className="w-4 h-4" />
+                      Marcar "Conta Solicitada" e Chamar Caixa
+                    </button>
                   </div>
                 </div>
               )}
             </div>
 
-            <div className="flex justify-end gap-2 pt-2 border-t border-stone-800">
+            {/* Footer do Modal */}
+            <div className="p-4 border-t border-stone-800 bg-stone-950/80 flex items-center justify-between">
+              <span className="text-[11px] text-stone-500">
+                Sabores & Nações • POS Certificado AT
+              </span>
               <button
-                onClick={() => setBillModalOpen(false)}
-                className="px-3 py-1.5 bg-stone-800 text-stone-300 text-xs font-semibold rounded-lg"
+                onClick={() => {
+                  setBillModalOpen(false);
+                  setIssuedInvoiceDoc(null);
+                  setInvoiceDispatchSuccess(null);
+                }}
+                className="px-4 py-2 bg-stone-800 hover:bg-stone-700 text-stone-300 text-xs font-semibold rounded-xl transition-colors"
               >
-                Voltar
-              </button>
-
-              {settings.allowCashierInAtendimento && (
-                <button
-                  onClick={handleDirectPayment}
-                  className="px-3 py-2 bg-purple-600 hover:bg-purple-500 text-white text-xs font-bold rounded-lg flex items-center gap-1.5 shadow-md"
-                >
-                  <Check className="w-4 h-4" />
-                  Liquidar no Atendimento
-                </button>
-              )}
-
-              <button
-                onClick={handleConfirmRequestBill}
-                className="px-4 py-2 bg-amber-600 hover:bg-amber-500 text-white text-xs font-bold rounded-lg flex items-center gap-1.5 shadow-md"
-              >
-                <Check className="w-4 h-4" />
-                Solicitar à Caixa
+                Fechar Painel
               </button>
             </div>
           </div>

@@ -1,6 +1,6 @@
 export type UserRole = 'admin' | 'manager' | 'waiter' | 'kitchen' | 'bar' | 'cashier';
 
-export type ModuleType = 'atendimento' | 'cozinha' | 'bar' | 'admin';
+export type ModuleType = 'atendimento' | 'cozinha' | 'bar' | 'admin' | 'faturacao';
 
 export interface User {
   id: string;

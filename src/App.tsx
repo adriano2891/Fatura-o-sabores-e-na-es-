@@ -11,11 +11,13 @@ import { OperatorModal } from './components/OperatorModal';
 import { ValidationScenarioModal } from './components/ValidationScenarioModal';
 import { ReceiptModal } from './components/ReceiptModal';
 import { ShiftHandoverModal } from './components/ShiftHandoverModal';
+import { initFirebaseRealtimeSync } from './services/firebaseRealtime';
 import { PortalView } from './views/PortalView';
 import { WaiterView } from './views/WaiterView';
 import { KitchenView } from './views/KitchenView';
 import { BarView } from './views/BarView';
 import { AdminHubView } from './views/AdminHubView';
+import { InvoicingPageView } from './views/InvoicingPageView';
 import { ModuleType, FiscalDocument, User } from './types';
 import {
   UtensilsCrossed,
@@ -41,6 +43,7 @@ export default function App() {
 
       if (paramMod === 'cozinha' || paramMod === 'kitchen' || paramMod === 'kds') return 'cozinha';
       if (paramMod === 'bar' || paramMod === 'bds') return 'bar';
+      if (paramMod === 'faturacao' || paramMod === 'faturas' || paramMod === 'invoices') return 'faturacao';
       if (paramMod === 'admin' || paramMod === 'administracao') return 'admin';
       if (paramMod === 'portal') return 'portal';
     } catch (e) {
@@ -60,6 +63,7 @@ export default function App() {
 
   // Módulo ativo: por defeito abre diretamente no atendimento
   const [currentModule, setCurrentModule] = useState<ModuleType | 'portal'>(getInitialModuleFromUrl);
+  const [adminSubTab, setAdminSubTab] = useState<any>('dashboard');
   const [state, setState] = useState<AppState>(() => store.getState());
 
   // Modais
@@ -72,7 +76,12 @@ export default function App() {
     const unsubscribe = store.subscribe((newState) => {
       setState(newState);
     });
-    return () => unsubscribe();
+    const fbSync = initFirebaseRealtimeSync();
+
+    return () => {
+      unsubscribe();
+      fbSync.unsubscribe?.();
+    };
   }, []);
 
   // Sincroniza a URL com o módulo ativo para permitir link direto e favoritos
@@ -100,7 +109,10 @@ export default function App() {
     };
   }, []);
 
-  const handleSelectModule = (mod: ModuleType | 'portal') => {
+  const handleSelectModule = (mod: ModuleType | 'portal', subTab?: string) => {
+    if (subTab) {
+      setAdminSubTab(subTab);
+    }
     if (mod === 'portal') {
       setCurrentModule('portal');
       window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -235,6 +247,16 @@ export default function App() {
             {/* 5. Módulo Administração */}
             {currentModule === 'admin' && (
               <AdminHubView
+                state={state}
+                initialSubTab={adminSubTab}
+                onViewReceipt={(doc) => setActiveReceiptDoc(doc)}
+                onSwitchModule={handleSelectModule}
+              />
+            )}
+
+            {/* 6. Módulo Faturação e Emissão de Notas */}
+            {currentModule === 'faturacao' && (
+              <InvoicingPageView
                 state={state}
                 onViewReceipt={(doc) => setActiveReceiptDoc(doc)}
                 onSwitchModule={handleSelectModule}

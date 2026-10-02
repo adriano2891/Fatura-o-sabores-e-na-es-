@@ -23,7 +23,7 @@ import {
 import { AppState, store } from '../services/storage';
 import { FiscalDocument, ModuleType } from '../types';
 import { DashboardView } from './DashboardView';
-import { InvoicesView } from './InvoicesView';
+import { InvoicingPageView } from './InvoicingPageView';
 import { CashierView } from './CashierView';
 import { SalesView } from './SalesView';
 import { TablesView } from './TablesView';
@@ -64,6 +64,11 @@ export const AdminHubView: React.FC<AdminHubViewProps> = ({
   initialSubTab = 'dashboard',
 }) => {
   const [activeSubTab, setActiveSubTab] = useState<AdminSubTab>(initialSubTab);
+
+  React.useEffect(() => {
+    setActiveSubTab(initialSubTab);
+  }, [initialSubTab]);
+
   const [adHocModalOpen, setAdHocModalOpen] = useState(false);
 
   const { comandas, sales, fiscalDocuments, onlineOrders, settings, isOnline } = state;
@@ -241,7 +246,11 @@ export const AdminHubView: React.FC<AdminHubViewProps> = ({
         )}
 
         {activeSubTab === 'faturacao' && (
-          <InvoicesView state={state} onViewReceipt={onViewReceipt} />
+          <InvoicingPageView
+            state={state}
+            onViewReceipt={onViewReceipt}
+            onSwitchModule={onSwitchModule}
+          />
         )}
 
         {activeSubTab === 'caixa' && (

@@ -137,6 +137,11 @@ export const Navbar: React.FC<NavbarProps> = ({
       color: 'text-purple-400',
       badge: activeComandas.filter((c) => c.status === 'conta_solicitada').length > 0 ? 'Conta!' : undefined,
     },
+    faturacao: {
+      label: 'Faturação & Notas',
+      icon: FileCheck2,
+      color: 'text-emerald-400',
+    },
   };
 
   const isAdminOrManager = currentUser.role === 'admin' || currentUser.role === 'manager';
@@ -185,23 +190,23 @@ export const Navbar: React.FC<NavbarProps> = ({
             </div>
           </button>
 
-          {/* Seletor Visível do Módulo Atual */}
-          <div className="relative">
-            <button
-              onClick={() => setModuleDropdownOpen(!moduleDropdownOpen)}
-              className="flex items-center gap-2 px-3 py-1.5 bg-stone-900 hover:bg-stone-800 rounded-xl border border-stone-700/80 text-xs font-bold transition-all shadow-sm"
-              title={isAdminOrManager ? "Alternar visão de módulo" : "Módulo em execução"}
-            >
-              <CurrentIcon className={`w-4 h-4 ${moduleMeta[currentModule].color}`} />
-              <span className="text-white">{moduleMeta[currentModule].label}</span>
-              {isAdminOrManager ? (
-                <ChevronDown className="w-3.5 h-3.5 text-stone-400 ml-0.5" />
-              ) : (
-                <span className="text-[10px] text-stone-400 font-normal hidden md:inline">• Individual</span>
-              )}
-            </button>
+            {/* Seletor Visível do Módulo Atual */}
+            <div className="relative">
+              <button
+                onClick={() => setModuleDropdownOpen(!moduleDropdownOpen)}
+                className="flex items-center gap-2 px-3 py-1.5 bg-stone-900 hover:bg-stone-800 rounded-xl border border-stone-700/80 text-xs font-bold transition-all shadow-sm"
+                title={isAdminOrManager ? "Alternar visão de módulo" : "Módulo em execução"}
+              >
+                <CurrentIcon className={`w-4 h-4 ${moduleMeta[currentModule].color}`} />
+                <span className="text-white">{moduleMeta[currentModule].label}</span>
+                {isAdminOrManager ? (
+                  <ChevronDown className="w-3.5 h-3.5 text-stone-400 ml-0.5" />
+                ) : (
+                  <span className="text-[10px] text-stone-400 font-normal hidden md:inline">• Individual</span>
+                )}
+              </button>
 
-            {/* Menu Dropdown de Módulos (com permissões) */}
+              {/* Menu Dropdown de Módulos (com permissões) */}
             {moduleDropdownOpen && (
               <div className="absolute left-0 mt-1.5 w-64 bg-stone-900 border border-stone-700 rounded-2xl shadow-2xl overflow-hidden z-50 animate-in fade-in py-1">
                 <div className="px-3 py-2 border-b border-stone-800 text-[10px] uppercase font-bold text-stone-400 flex items-center justify-between">
@@ -222,7 +227,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                   {currentModule === 'portal' && <CheckCircle2 className="w-3.5 h-3.5 text-amber-400" />}
                 </button>
 
-                {(['atendimento', 'cozinha', 'bar', 'admin'] as ModuleType[]).map((m) => {
+                {(['atendimento', 'cozinha', 'bar', 'faturacao', 'admin'] as ModuleType[]).map((m) => {
                   const mData = moduleMeta[m];
                   const MIcon = mData.icon;
                   const isAuth = store.canUserAccessModule(currentUser, m);
@@ -259,6 +264,18 @@ export const Navbar: React.FC<NavbarProps> = ({
               </div>
             )}
           </div>
+
+          {/* Botão Visível: Voltar ao Portal Geral */}
+          {currentModule !== 'portal' && (
+            <button
+              onClick={() => onSelectModule('portal')}
+              className="hidden lg:flex items-center gap-1.5 px-3 py-1.5 bg-stone-900 hover:bg-stone-800 text-stone-300 hover:text-white rounded-xl border border-stone-800 text-xs font-bold transition-all shadow-sm active:scale-95"
+              title="Voltar ao Portal Geral de Módulos"
+            >
+              <Home className="w-3.5 h-3.5 text-amber-400" />
+              <span>Voltar ao Portal Geral</span>
+            </button>
+          )}
         </div>
 
         {/* Central & Direita: Teste Obrigatório, Turno, Som, Utilizador */}

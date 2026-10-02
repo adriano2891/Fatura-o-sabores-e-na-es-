@@ -2,6 +2,45 @@
 <html lang="pt-PT">
   <head>
     <meta charset="UTF-8" />
+    <script>
+      (function() {
+        // Guard against libraries attempting to reassign window.fetch when window has only a getter
+        try {
+          var originalFetch = window.fetch;
+          var customFetch = originalFetch;
+          Object.defineProperty(window, 'fetch', {
+            get: function() {
+              return customFetch || originalFetch;
+            },
+            set: function(val) {
+              customFetch = val;
+            },
+            configurable: true,
+            enumerable: true
+          });
+        } catch (e) {
+          try {
+            var proto = Object.getPrototypeOf(window);
+            if (proto && Object.getOwnPropertyDescriptor(proto, 'fetch')) {
+              var pFetch = window.fetch;
+              Object.defineProperty(proto, 'fetch', {
+                get: function() { return pFetch; },
+                set: function(val) { pFetch = val; },
+                configurable: true,
+                enumerable: true
+              });
+            }
+          } catch (e2) {}
+        }
+
+        window.addEventListener('error', function(event) {
+          if (event && event.message && event.message.indexOf('fetch of #<Window>') !== -1) {
+            event.preventDefault && event.preventDefault();
+            return true;
+          }
+        });
+      })();
+    </script>
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
     <title>Sabores & Nações - POS & Gestão de Restaurante</title>
     <meta name="description" content="Sistema integrado de ponto de venda, comanda digital de mesa, gestão de salas, cozinha, caixa e faturação certificada para a Sabores & Nações em Portugal." />

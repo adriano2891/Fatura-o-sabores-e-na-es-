@@ -937,6 +937,28 @@ class Store {
     this.persistAndBroadcast();
   }
 
+  public loadRemoteState(remotePartial: Partial<AppState>) {
+    if (!remotePartial) return;
+    this.state = {
+      ...this.state,
+      tables: remotePartial.tables || this.state.tables,
+      comandas: remotePartial.comandas || this.state.comandas,
+      tableCalls: remotePartial.tableCalls || this.state.tableCalls,
+      sales: remotePartial.sales || this.state.sales,
+      fiscalDocuments: remotePartial.fiscalDocuments || this.state.fiscalDocuments,
+      cashSessions: remotePartial.cashSessions || this.state.cashSessions,
+      currentCashSessionId: remotePartial.currentCashSessionId ?? this.state.currentCashSessionId,
+      customers: remotePartial.customers || this.state.customers,
+      products: remotePartial.products || this.state.products,
+      settings: remotePartial.settings || this.state.settings,
+      shiftHandovers: remotePartial.shiftHandovers || this.state.shiftHandovers,
+    };
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(this.state));
+    } catch {}
+    this.notify();
+  }
+
   // --- SEGURANÇA OPERACIONAL, RBAC & AUDITORIA ---
 
   public canUserAccessModule(user: User, module: ModuleType): boolean {
@@ -953,7 +975,7 @@ class Store {
       case 'bar':
         return module === 'bar';
       case 'cashier':
-        return module === 'admin';
+        return module === 'admin' || module === 'faturacao';
       default:
         return false;
     }
@@ -1621,6 +1643,10 @@ class Store {
 
     this.state = { ...this.state, tableCalls: updatedCalls, tables: updatedTables };
     this.persistAndBroadcast();
+  }
+
+  public resolveTableCall(callId: string, user?: User) {
+    this.completeTableCall(callId);
   }
 
   public regenerateTableQrToken(tableId: string): string {
