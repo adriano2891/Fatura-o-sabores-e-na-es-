@@ -746,15 +746,17 @@ const INITIAL_SAMPLE_COMANDA: Comanda = {
   numberDisplay: 'CMD-001',
   tableId: 't-2',
   tableName: 'Mesa 2',
+  roomName: 'Sala Principal',
   guestCount: 2,
-  status: 'ocupada',
+  status: 'aberta',
   openedAt: new Date(Date.now() - 1200000).toISOString(),
   updatedAt: new Date(Date.now() - 300000).toISOString(),
   waiterId: 'u-3',
   waiterName: 'João Pereira',
+  discountAmount: 0,
   seats: [
     { seatNumber: 1, name: 'Ana', allergies: [] },
-    { seatNumber: 2, name: 'Pedro', allergies: [{ id: 'al-1', name: 'Marisco', type: 'alergia', isPredefined: true }] },
+    { seatNumber: 2, name: 'Pedro', allergies: [{ id: 'al-1', name: 'Marisco', type: 'alergia' }] },
   ],
   rounds: [
     {
@@ -766,6 +768,7 @@ const INITIAL_SAMPLE_COMANDA: Comanda = {
         {
           id: 'item-demo-1',
           productId: 'p-1',
+          productCode: 'PRT-001',
           productName: 'Bacalhau à Brás Tradicional',
           quantity: 1,
           unitPrice: 14.5,
@@ -783,6 +786,7 @@ const INITIAL_SAMPLE_COMANDA: Comanda = {
         {
           id: 'item-demo-2',
           productId: 'p-8',
+          productCode: 'BEB-008',
           productName: 'Água das Pedras Salgadas 25cl',
           quantity: 2,
           unitPrice: 2.2,
