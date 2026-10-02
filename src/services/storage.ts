@@ -138,9 +138,39 @@ const DEFAULT_ROOMS: Room[] = [
 
 const DEFAULT_TABLES: Table[] = [
   { id: 't-1', number: 'Mesa 1', roomId: 'r-1', roomName: 'Sala Principal', capacity: 4, status: 'livre', qrCodeToken: 'sn-tbl-1-a7b9' },
-  { id: 't-2', number: 'Mesa 2', roomId: 'r-1', roomName: 'Sala Principal', capacity: 2, status: 'livre', qrCodeToken: 'sn-tbl-2-f3e1' },
+  {
+    id: 't-2',
+    number: 'Mesa 2',
+    roomId: 'r-1',
+    roomName: 'Sala Principal',
+    capacity: 2,
+    status: 'ocupada',
+    activeComandaId: 'cmd-sample-mesa-2',
+    waiterId: 'u-3',
+    waiterName: 'João Pereira',
+    openedAt: new Date(Date.now() - 1200000).toISOString(),
+    guestCount: 2,
+    totalAmount: 18.9,
+    qrCodeToken: 'sn-tbl-2-f3e1',
+  },
   { id: 't-3', number: 'Mesa 3', roomId: 'r-1', roomName: 'Sala Principal', capacity: 4, status: 'livre', qrCodeToken: 'sn-tbl-3-98c4' },
-  { id: 't-4', number: 'Mesa 4', roomId: 'r-1', roomName: 'Sala Principal', capacity: 6, status: 'livre', qrCodeToken: 'sn-tbl-4-d2e8' },
+  {
+    id: 't-4',
+    number: 'Mesa 4',
+    roomId: 'r-1',
+    roomName: 'Sala Principal',
+    capacity: 6,
+    status: 'livre',
+    qrCodeToken: 'sn-tbl-4-d2e8',
+    activeCall: {
+      id: 'call-sample-1',
+      tableId: 't-4',
+      tableNumber: 'Mesa 4',
+      type: 'chamar_empregado',
+      status: 'solicitado',
+      createdAt: new Date(Date.now() - 180000).toISOString(),
+    },
+  },
   { id: 't-5', number: 'Mesa 5', roomId: 'r-1', roomName: 'Sala Principal', capacity: 2, status: 'livre', qrCodeToken: 'sn-tbl-5-6b4a' },
   { id: 't-6', number: 'Mesa 6', roomId: 'r-1', roomName: 'Sala Principal', capacity: 4, status: 'livre', qrCodeToken: 'sn-tbl-6-1c9f' },
   { id: 't-11', number: 'Esplanada 11', roomId: 'r-2', roomName: 'Esplanada', capacity: 2, status: 'livre', qrCodeToken: 'sn-tbl-11-8e2b' },
@@ -711,13 +741,86 @@ const DEFAULT_ONLINE_ORDERS: OnlineOrder[] = [
   },
 ];
 
+const INITIAL_SAMPLE_COMANDA: Comanda = {
+  id: 'cmd-sample-mesa-2',
+  numberDisplay: 'CMD-001',
+  tableId: 't-2',
+  tableName: 'Mesa 2',
+  guestCount: 2,
+  status: 'ocupada',
+  openedAt: new Date(Date.now() - 1200000).toISOString(),
+  updatedAt: new Date(Date.now() - 300000).toISOString(),
+  waiterId: 'u-3',
+  waiterName: 'João Pereira',
+  seats: [
+    { seatNumber: 1, name: 'Ana', allergies: [] },
+    { seatNumber: 2, name: 'Pedro', allergies: [{ id: 'al-1', name: 'Marisco', type: 'alergia', isPredefined: true }] },
+  ],
+  rounds: [
+    {
+      roundNumber: 1,
+      createdAt: new Date(Date.now() - 900000).toISOString(),
+      waiterId: 'u-3',
+      waiterName: 'João Pereira',
+      items: [
+        {
+          id: 'item-demo-1',
+          productId: 'p-1',
+          productName: 'Bacalhau à Brás Tradicional',
+          quantity: 1,
+          unitPrice: 14.5,
+          vatRate: 0.13,
+          sector: 'cozinha',
+          selectedExtras: [],
+          totalItemPrice: 14.5,
+          notes: 'Bem estaladiço',
+          status: 'em_preparacao',
+          statusUpdatedAt: new Date(Date.now() - 600000).toISOString(),
+          roundNumber: 1,
+          seatNumber: 1,
+          seatName: 'Ana',
+        },
+        {
+          id: 'item-demo-2',
+          productId: 'p-8',
+          productName: 'Água das Pedras Salgadas 25cl',
+          quantity: 2,
+          unitPrice: 2.2,
+          vatRate: 0.23,
+          sector: 'bar',
+          selectedExtras: [],
+          totalItemPrice: 4.4,
+          notes: 'Com limão e gelo',
+          status: 'pronto',
+          statusUpdatedAt: new Date(Date.now() - 200000).toISOString(),
+          roundNumber: 1,
+          seatNumber: 2,
+          seatName: 'Pedro',
+        },
+      ],
+    },
+  ],
+  total: 18.9,
+  subtotal: 16.41,
+  taxTotal: 2.49,
+  paidAmount: 0,
+  balanceDue: 18.9,
+  saleId: 'VENDA-CMD-001',
+  version: 1,
+};
+
 function getInitialState(): AppState {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (raw) {
       const parsed = JSON.parse(raw);
+      const comandas = parsed.comandas?.length ? parsed.comandas : [INITIAL_SAMPLE_COMANDA];
+      const tables = parsed.tables?.length ? parsed.tables : DEFAULT_TABLES;
+
       return {
         ...parsed,
+        tables,
+        comandas,
         isOnline: navigator.onLine,
         currentUser: parsed.currentUser || DEFAULT_USERS[0],
         users: parsed.users?.length ? parsed.users : DEFAULT_USERS,
@@ -739,7 +842,7 @@ function getInitialState(): AppState {
     tables: DEFAULT_TABLES,
     categories: DEFAULT_CATEGORIES,
     products: DEFAULT_PRODUCTS,
-    comandas: [],
+    comandas: [INITIAL_SAMPLE_COMANDA],
     sales: [],
     fiscalDocuments: [],
     cashSessions: [INITIAL_CASH_SESSION],

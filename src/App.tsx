@@ -27,8 +27,6 @@ import {
 } from 'lucide-react';
 
 export default function App() {
-  const [state, setState] = useState<AppState>(store.getState());
-
   // Obter módulo inicial a partir dos parâmetros de URL (?modulo=atendimento, ?page=atendimento ou #atendimento)
   const getInitialModuleFromUrl = (): ModuleType | 'portal' => {
     try {
@@ -41,21 +39,6 @@ export default function App() {
         searchParams.get('tab') ||
         hash;
 
-      if (
-        paramMod === 'atendimento' ||
-        paramMod === 'garcom' ||
-        paramMod === 'waiter' ||
-        paramMod === 'mesas'
-      ) {
-        const curr = store.getState().currentUser;
-        if (!store.canUserAccessModule(curr, 'atendimento')) {
-          const waiterUser = store.getState().users.find((u) => u.role === 'waiter');
-          if (waiterUser) {
-            store.setCurrentUser(waiterUser);
-          }
-        }
-        return 'atendimento';
-      }
       if (paramMod === 'cozinha' || paramMod === 'kitchen' || paramMod === 'kds') return 'cozinha';
       if (paramMod === 'bar' || paramMod === 'bds') return 'bar';
       if (paramMod === 'admin' || paramMod === 'administracao') return 'admin';
@@ -63,12 +46,21 @@ export default function App() {
     } catch (e) {
       console.error('Erro ao ler URL param', e);
     }
-    const user = store.getState().currentUser;
-    return store.getDefaultModuleForUser(user);
+
+    // Por defeito, abre DIRETO no Módulo de Atendimento do Garçom!
+    const curr = store.getState().currentUser;
+    if (!store.canUserAccessModule(curr, 'atendimento')) {
+      const waiterUser = store.getState().users.find((u) => u.role === 'waiter');
+      if (waiterUser) {
+        store.setCurrentUser(waiterUser);
+      }
+    }
+    return 'atendimento';
   };
 
-  // Módulo ativo: 'portal' | 'atendimento' | 'cozinha' | 'bar' | 'admin'
+  // Módulo ativo: por defeito abre diretamente no atendimento
   const [currentModule, setCurrentModule] = useState<ModuleType | 'portal'>(getInitialModuleFromUrl);
+  const [state, setState] = useState<AppState>(() => store.getState());
 
   // Modais
   const [operatorModalOpen, setOperatorModalOpen] = useState(false);
@@ -173,12 +165,22 @@ export default function App() {
                 não possui permissões para visualizar este módulo.
               </p>
             </div>
-            <div className="pt-2">
+            <div className="pt-2 space-y-2">
+              <button
+                onClick={() => {
+                  const waiter = state.users.find((u) => u.role === 'waiter') || state.users[0];
+                  store.setCurrentUser(waiter);
+                  setCurrentModule('atendimento');
+                }}
+                className="w-full py-2.5 bg-amber-600 hover:bg-amber-500 text-white font-bold text-xs rounded-xl shadow-md transition-all flex items-center justify-center gap-2"
+              >
+                <span>🤵</span> Entrar como Garçom (João Pereira)
+              </button>
               <button
                 onClick={() => handleSelectModule(store.getDefaultModuleForUser(state.currentUser))}
-                className="w-full py-2.5 bg-amber-600 hover:bg-amber-500 text-white font-bold text-xs rounded-xl shadow-md transition-all"
+                className="w-full py-2 bg-stone-800 hover:bg-stone-700 text-stone-300 font-semibold text-xs rounded-xl transition-all"
               >
-                Ir para o Meu Módulo Autorizado
+                Ir para o Meu Módulo Autorizado ({state.currentUser.role})
               </button>
             </div>
           </div>

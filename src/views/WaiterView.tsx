@@ -50,8 +50,12 @@ interface WaiterViewProps {
 export const WaiterView: React.FC<WaiterViewProps> = ({ state, onSelectTab }) => {
   const { tables, products, categories, comandas, currentUser, settings, representatives, customers } = state;
 
-  const [selectedTableId, setSelectedTableId] = useState<string | null>(null);
-  const [tableFilter, setTableFilter] = useState<'minhas' | 'livres' | 'ocupadas' | 'alertas'>('minhas');
+  // Seleciona por padrão a primeira mesa com comanda aberta ou a primeira mesa
+  const [selectedTableId, setSelectedTableId] = useState<string | null>(() => {
+    const occupied = tables.find((t) => t.status === 'ocupada' || t.status === 'conta_solicitada');
+    return occupied?.id || tables[0]?.id || 't-1';
+  });
+  const [tableFilter, setTableFilter] = useState<'todas' | 'minhas' | 'livres' | 'ocupadas' | 'alertas'>('todas');
   const [tableSearchQuery, setTableSearchQuery] = useState<string>('');
   const [guestCountInput, setGuestCountInput] = useState<number>(2);
   const [repCodeInput, setRepCodeInput] = useState<string>('');
@@ -129,7 +133,15 @@ export const WaiterView: React.FC<WaiterViewProps> = ({ state, onSelectTab }) =>
       }
     }
 
+    if (tableFilter === 'todas') {
+      return true;
+    }
     if (tableFilter === 'minhas') {
+      const myTables = tables.filter((tbl) => tbl.waiterId === currentUser.id);
+      if (myTables.length === 0) {
+        // Se ainda não tiver mesas atribuídas, mostra mesas livres para abrir atendimento
+        return t.status === 'livre';
+      }
       return t.waiterId === currentUser.id;
     }
     if (tableFilter === 'livres') {
@@ -402,35 +414,43 @@ export const WaiterView: React.FC<WaiterViewProps> = ({ state, onSelectTab }) =>
               />
             </div>
 
-            <div className="flex items-center gap-1 bg-stone-950 p-1 rounded-xl border border-stone-800 text-xs">
+            <div className="flex items-center gap-1 bg-stone-950 p-1 rounded-xl border border-stone-800 text-xs overflow-x-auto no-scrollbar">
+              <button
+                onClick={() => setTableFilter('todas')}
+                className={`px-2.5 py-1 rounded-lg font-semibold transition-all whitespace-nowrap ${
+                  tableFilter === 'todas' ? 'bg-amber-600 text-white shadow' : 'text-stone-400 hover:text-white'
+                }`}
+              >
+                Todas ({tables.length})
+              </button>
               <button
                 onClick={() => setTableFilter('minhas')}
-                className={`px-2.5 py-1 rounded-lg font-semibold transition-all ${
-                  tableFilter === 'minhas' ? 'bg-amber-600 text-white' : 'text-stone-400'
+                className={`px-2.5 py-1 rounded-lg font-semibold transition-all whitespace-nowrap ${
+                  tableFilter === 'minhas' ? 'bg-amber-600 text-white shadow' : 'text-stone-400 hover:text-white'
                 }`}
               >
                 Minhas mesas
               </button>
               <button
                 onClick={() => setTableFilter('livres')}
-                className={`px-2.5 py-1 rounded-lg font-semibold transition-all ${
-                  tableFilter === 'livres' ? 'bg-amber-600 text-white' : 'text-stone-400'
+                className={`px-2.5 py-1 rounded-lg font-semibold transition-all whitespace-nowrap ${
+                  tableFilter === 'livres' ? 'bg-amber-600 text-white shadow' : 'text-stone-400 hover:text-white'
                 }`}
               >
-                Livres
+                Livres ({tables.filter((t) => t.status === 'livre').length})
               </button>
               <button
                 onClick={() => setTableFilter('ocupadas')}
-                className={`px-2.5 py-1 rounded-lg font-semibold transition-all ${
-                  tableFilter === 'ocupadas' ? 'bg-amber-600 text-white' : 'text-stone-400'
+                className={`px-2.5 py-1 rounded-lg font-semibold transition-all whitespace-nowrap ${
+                  tableFilter === 'ocupadas' ? 'bg-amber-600 text-white shadow' : 'text-stone-400 hover:text-white'
                 }`}
               >
-                Ocupadas
+                Ocupadas ({tables.filter((t) => t.status === 'ocupada' || t.status === 'conta_solicitada').length})
               </button>
               <button
                 onClick={() => setTableFilter('alertas')}
-                className={`px-2.5 py-1 rounded-lg font-semibold transition-all ${
-                  tableFilter === 'alertas' ? 'bg-rose-600 text-white animate-pulse' : 'text-stone-400'
+                className={`px-2.5 py-1 rounded-lg font-semibold transition-all whitespace-nowrap ${
+                  tableFilter === 'alertas' ? 'bg-rose-600 text-white animate-pulse' : 'text-stone-400 hover:text-white'
                 }`}
               >
                 Com alertas
