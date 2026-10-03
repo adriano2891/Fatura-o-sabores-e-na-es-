@@ -41,6 +41,7 @@ export default function App() {
         searchParams.get('tab') ||
         hash;
 
+      if (paramMod === 'atendimento' || paramMod === 'garcom' || paramMod === 'mesas') return 'atendimento';
       if (paramMod === 'cozinha' || paramMod === 'kitchen' || paramMod === 'kds') return 'cozinha';
       if (paramMod === 'bar' || paramMod === 'bds') return 'bar';
       if (paramMod === 'faturacao' || paramMod === 'faturas' || paramMod === 'invoices') return 'faturacao';
@@ -50,15 +51,8 @@ export default function App() {
       console.error('Erro ao ler URL param', e);
     }
 
-    // Por defeito, abre DIRETO no Módulo de Atendimento do Garçom!
-    const curr = store.getState().currentUser;
-    if (!store.canUserAccessModule(curr, 'atendimento')) {
-      const waiterUser = store.getState().users.find((u) => u.role === 'waiter');
-      if (waiterUser) {
-        store.setCurrentUser(waiterUser);
-      }
-    }
-    return 'atendimento';
+    // Por defeito, a página inicial é o Portal Geral de Acesso!
+    return 'portal';
   };
 
   // Módulo ativo: por defeito abre diretamente no atendimento
@@ -131,10 +125,9 @@ export default function App() {
     }
   };
 
-  const handleUserLoginSuccess = (newUser: User) => {
-    // Encaminha automaticamente para o módulo apropriado conforme a função
-    const defaultMod = store.getDefaultModuleForUser(newUser);
-    setCurrentModule(defaultMod);
+  const handleUserLoginSuccess = (_newUser: User) => {
+    // Encaminha o utilizador para o Portal Geral de Acesso após a autenticação
+    setCurrentModule('portal');
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
